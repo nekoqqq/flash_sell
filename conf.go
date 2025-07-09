@@ -2,6 +2,7 @@ package flash_sell
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/logs"
@@ -16,17 +17,25 @@ import (
 type FlashSellConf struct {
 	redisConf RedisConf
 	etcdConf  EtcdConf
+	logConf   LogConf
 }
 
 type RedisConf struct {
-	redisAddr        string
-	redisMaxIdle     int
-	redisMaxActive   int
-	redisIdleTimeout time.Duration
+	addr        string
+	maxIdle     int
+	maxActive   int
+	idleTimeOut time.Duration
 }
 
 type EtcdConf struct {
-	etcdAddr string
+	addr        string
+	dialTimeout time.Duration
+	userName    string
+	password    string
+}
+type LogConf struct {
+	path  string
+	level string
 }
 
 var (
@@ -187,11 +196,34 @@ func formatBytes(bytes uint64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
+func initLog() error {
+	config := make(map[string]interface{})
+	config["filename"] = gFlashSellConf.logConf.path
+	switch gFlashSellConf.logConf.level {
+	case "debug":
+		config["level"] = logs.LevelDebug
+	case "info":
+		config["level"] = logs.LevelInfo
+	case "warn":
+		config["level"] = logs.LevelWarn
+	case "error":
+		config["level"] = logs.LevelError
+	}
+
+	configStr, err := json.Marshal(config)
+	if err != nil {
+		fmt.Println("json marshal log config failed", err)
+		return err
+	}
+	logs.SetLogger(logs.AdapterFile, string(configStr))
+
+	return nil
+}
 func initRedis() error {
 	pool = &redis.Pool{
-		MaxIdle:     gFlashSellConf.redisConf.redisMaxIdle,
-		MaxActive:   gFlashSellConf.redisConf.redisMaxActive,
-		IdleTimeout: gFlashSellConf.redisConf.redisIdleTimeout,
+		MaxIdle:     gFlashSellConf.redisConf.maxIdle,
+		MaxActive:   gFlashSellConf.redisConf.maxActive,
+		IdleTimeout: gFlashSellConf.redisConf.idleTimeOut,
 		Dial: func() (redis.Conn, error) {
 			return redis.Dial("tcp", "localhost:6379")
 		},
@@ -220,10 +252,10 @@ func initRedis() error {
 }
 func initEtcd() (err error) {
 	config := etcd.Config{
-		Endpoints:   []string{"localhost:2379"}, // etcd 节点地址
-		DialTimeout: 5 * time.Second,            // 连接超时时间
-		Username:    "root",                     // 用户名（如果启用认证）
-		Password:    "secret",                   // 密码（如果启用认证）
+		Endpoints:   []string{gFlashSellConf.etcdConf.addr}, // etcd 节点地址
+		DialTimeout: gFlashSellConf.etcdConf.dialTimeout,    // 连接超时时间
+		Username:    gFlashSellConf.etcdConf.userName,       // 用户名（如果启用认证）
+		Password:    gFlashSellConf.etcdConf.password,       // 密码（如果启用认证）
 	}
 
 	// 创建 etcd 客户端
@@ -256,20 +288,40 @@ func InitConfig() (err error) {
 	redisMaxActive, _ := beego.AppConfig.Int("redis_max_active")
 	redisIdleTimeout, _ := beego.AppConfig.Int("redis_idle_timeout")
 	etcdAddr := beego.AppConfig.String("etcd_addr")
+	etcdDialTimeout, _ := beego.AppConfig.Int("etcd_dial_timeout")
+	etcdUserName := beego.AppConfig.String("etcd_user_name")
+	etcdPassword := beego.AppConfig.String("etcd_password")
+
+	logPath := beego.AppConfig.String("log_path")
+	logLevel := beego.AppConfig.String("log_level")
+
 	gFlashSellConf = &FlashSellConf{
 		redisConf: RedisConf{
-			redisAddr:        redisAddr,
-			redisMaxIdle:     redisMaxIdle,
-			redisMaxActive:   redisMaxActive,
-			redisIdleTimeout: time.Duration(redisIdleTimeout) * time.Second,
+			addr:        redisAddr,
+			maxIdle:     redisMaxIdle,
+			maxActive:   redisMaxActive,
+			idleTimeOut: time.Duration(redisIdleTimeout) * time.Second,
 		},
 		etcdConf: EtcdConf{
-			etcdAddr: etcdAddr,
+			addr:        etcdAddr,
+			dialTimeout: time.Duration(etcdDialTimeout) * time.Second,
+			userName:    etcdUserName,
+			password:    etcdPassword,
+		},
+		logConf: LogConf{
+			path:  logPath,
+			level: logLevel,
 		},
 	}
 	logs.Debug("config: %+v", gFlashSellConf)
 	if len(redisAddr) == 0 || len(etcdAddr) == 0 {
 		err = fmt.Errorf("redis addr or etcd addr empty", redisAddr, etcdAddr)
+		return err
+	}
+	err = initLog()
+	if err != nil {
+		logs.Error("init log failed, err:", err)
+		err = fmt.Errorf("init log failed, err:%v", err)
 		return err
 	}
 
