@@ -3,6 +3,7 @@ package flash_sell
 import (
 	"context"
 	"encoding/json"
+	"flash_sell/utils"
 	"fmt"
 	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/logs"
@@ -44,6 +45,19 @@ var (
 	etcdClient     *etcd.Client
 )
 
+func printRedisInfo(conn redis.Conn) error {
+	logs.Info("===== 开始收集Redis信息 =====")
+	isCluster, err := isRedisCluster(conn)
+	if err != nil {
+		return fmt.Errorf("检测Redis模式失败: %w", err)
+	}
+
+	if isCluster {
+		return printClusterSummary(conn)
+	}
+	return printStandaloneSummary(conn)
+}
+
 func isRedisCluster(conn redis.Conn) (bool, error) {
 	// 尝试执行集群命令
 	_, err := conn.Do("CLUSTER", "INFO")
@@ -61,84 +75,74 @@ func isRedisCluster(conn redis.Conn) (bool, error) {
 	return false, err
 }
 
-func printClusterSummary(conn redis.Conn) {
-	// 获取集群信息
+func printClusterSummary(conn redis.Conn) error {
 	clusterInfo, err := redis.String(conn.Do("CLUSTER", "INFO"))
 	if err != nil {
-		log.Fatalf("获取集群信息失败: %v", err)
+		return fmt.Errorf("获取集群信息失败: %w", err)
 	}
 
-	// 解析集群信息
-	clusterStats := parseInfo(clusterInfo)
-	fmt.Printf("模式: Redis集群\n")
-	fmt.Printf("集群状态: %s\n", clusterStats["cluster_state"])
-	fmt.Printf("节点数量: %s\n", clusterStats["cluster_known_nodes"])
-	fmt.Printf("已分配槽位: %s/%s\n", clusterStats["cluster_slots_assigned"], "16384")
+	clusterStats := utils.ParseInfo(clusterInfo)
+	logs.Info("模式: Redis集群")
+	logs.Info("集群状态: %s", clusterStats["cluster_state"])
+	logs.Info("节点数量: %s", clusterStats["cluster_known_nodes"])
+	logs.Info("已分配槽位: %s/16384", clusterStats["cluster_slots_assigned"])
 
+	return printCommonRedisInfo(conn)
+}
+
+func printStandaloneSummary(conn redis.Conn) error {
+	info, err := redis.String(conn.Do("INFO"))
+	if err != nil {
+		return fmt.Errorf("获取Redis信息失败: %w", err)
+	}
+
+	infoStats := utils.ParseInfo(info)
+	logs.Info("模式: 单节点")
+	logs.Info("版本: %s", infoStats["redis_version"])
+	logs.Info("运行时间: %s 天", infoStats["uptime_in_days"])
+
+	return printCommonRedisInfo(conn)
+}
+func printCommonRedisInfo(conn redis.Conn) error {
 	// 获取内存信息
 	memInfo, err := redis.String(conn.Do("INFO", "memory"))
 	if err != nil {
-		log.Fatalf("获取内存信息失败: %v", err)
+		return fmt.Errorf("获取内存信息失败: %w", err)
 	}
-	memStats := parseInfo(memInfo)
+	memStats := utils.ParseInfo(memInfo)
 
-	// 获取键数量
+	// 获取键空间信息
 	keyspaceInfo, err := redis.String(conn.Do("INFO", "keyspace"))
 	if err != nil {
-		log.Fatalf("获取键空间信息失败: %v", err)
+		return fmt.Errorf("获取键空间信息失败: %w", err)
 	}
-	keyspaceStats := parseInfo(keyspaceInfo)
-
-	// 获取当前节点配置
-	configInfo, err := redis.Strings(conn.Do("CONFIG", "GET", "maxmemory-policy"))
-	if err != nil || len(configInfo) < 2 {
-		log.Printf("获取清除策略失败: %v", err)
-	} else {
-		fmt.Printf("清除策略: %s\n", configInfo[1])
-	}
-
-	// 打印容量信息
-	printCapacityInfo(memStats, keyspaceStats)
-}
-
-func printStandaloneSummary(conn redis.Conn) {
-	// 获取服务器信息
-	info, err := redis.String(conn.Do("INFO"))
-	if err != nil {
-		log.Fatalf("获取Redis信息失败: %v", err)
-	}
-	infoStats := parseInfo(info)
+	keyspaceStats := utils.ParseInfo(keyspaceInfo)
 
 	// 获取清除策略
 	configInfo, err := redis.Strings(conn.Do("CONFIG", "GET", "maxmemory-policy"))
 	if err != nil || len(configInfo) < 2 {
-		log.Printf("获取清除策略失败: %v", err)
+		logs.Warn("获取清除策略失败: %v", err)
 	} else {
-		fmt.Printf("清除策略: %s\n", configInfo[1])
+		logs.Info("清除策略: %s", configInfo[1])
 	}
 
-	// 打印关键信息
-	fmt.Printf("模式: 单节点\n")
-	fmt.Printf("版本: %s\n", infoStats["redis_version"])
-	fmt.Printf("运行时间: %s 天\n", infoStats["uptime_in_days"])
-
 	// 打印容量信息
-	printCapacityInfo(infoStats, infoStats)
+	printCapacityInfo(memStats, keyspaceStats)
+	return nil
 }
-
 func printCapacityInfo(memStats map[string]string, keyspaceStats map[string]string) {
-	// 内存使用情况
 	maxMemory, _ := strconv.ParseUint(memStats["maxmemory"], 10, 64)
 	usedMemory, _ := strconv.ParseUint(memStats["used_memory"], 10, 64)
 
-	fmt.Printf("\n===== 容量信息 =====\n")
+	logs.Info("===== 容量信息 =====")
 
 	if maxMemory > 0 {
 		memoryUsage := float64(usedMemory) / float64(maxMemory) * 100
-		fmt.Printf("内存总量: %s\n", formatBytes(maxMemory))
-		fmt.Printf("已用内存: %s (%.1f%%)\n", formatBytes(usedMemory), memoryUsage)
+		logs.Info("内存总量: %s", utils.FormatBytes(maxMemory))
+		logs.Info("已用内存: %s (%.1f%%)", utils.FormatBytes(usedMemory), memoryUsage)
 	} else {
-		fmt.Printf("已用内存: %s\n", formatBytes(usedMemory))
+		logs.Info("已用内存: %s", utils.FormatBytes(usedMemory))
+		logs.Warn("警告: 未配置最大内存限制(maxmemory=0)")
 	}
 
 	// 键数量统计
@@ -150,56 +154,37 @@ func printCapacityInfo(memStats map[string]string, keyspaceStats map[string]stri
 			}
 		}
 	}
-	fmt.Printf("键总数: %d\n", totalKeys)
+	logs.Info("键总数: %d", totalKeys)
 
 	// 内存碎片率
-	fragRatio, _ := strconv.ParseFloat(memStats["mem_fragmentation_ratio"], 64)
-	fmt.Printf("内存碎片率: %.2f\n", fragRatio)
+	if fragRatio, ok := memStats["mem_fragmentation_ratio"]; ok {
+		if ratio, err := strconv.ParseFloat(fragRatio, 64); err == nil {
+			logs.Info("内存碎片率: %.2f", ratio)
+			if ratio > 1.5 {
+				logs.Warn("警告: 内存碎片率过高(>1.5), 考虑重启Redis或设置activedefrag=yes")
+			}
+		}
+	}
 
 	// 过期键信息
 	if expiredKeys, ok := memStats["expired_keys"]; ok {
-		fmt.Printf("已过期键: %s\n", expiredKeys)
+		logs.Info("已过期键: %s", expiredKeys)
 	}
+
+	// 淘汰键信息
 	if evictedKeys, ok := memStats["evicted_keys"]; ok {
-		fmt.Printf("淘汰键数: %s\n", evictedKeys)
-	}
-}
-
-func parseInfo(info string) map[string]string {
-	stats := make(map[string]string)
-	lines := strings.Split(info, "\r\n")
-
-	for _, line := range lines {
-		if len(line) == 0 || line[0] == '#' {
-			continue
-		}
-
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			stats[parts[0]] = parts[1]
+		if evicted, _ := strconv.Atoi(evictedKeys); evicted > 0 {
+			logs.Warn("淘汰键数: %s (内存不足导致键被淘汰)", evictedKeys)
+		} else {
+			logs.Info("淘汰键数: %s", evictedKeys)
 		}
 	}
-
-	return stats
-}
-
-func formatBytes(bytes uint64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := uint64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 func initLog() error {
 	config := make(map[string]interface{})
 	config["filename"] = gFlashSellConf.logConf.path
-	switch gFlashSellConf.logConf.level {
+	switch strings.ToLower(gFlashSellConf.logConf.level) {
 	case "debug":
 		config["level"] = logs.LevelDebug
 	case "info":
@@ -208,18 +193,26 @@ func initLog() error {
 		config["level"] = logs.LevelWarn
 	case "error":
 		config["level"] = logs.LevelError
+	default:
+		config["level"] = logs.LevelInfo // 默认级别
 	}
+	config["console"] = true
 
 	configStr, err := json.Marshal(config)
 	if err != nil {
-		fmt.Println("json marshal log config failed", err)
-		return err
+		return fmt.Errorf("序列化日志配置失败: %w", err)
 	}
-	logs.SetLogger(logs.AdapterFile, string(configStr))
-
+	if err := logs.SetLogger(logs.AdapterFile, string(configStr)); err != nil {
+		return fmt.Errorf("设置日志适配器失败: %w", err)
+	}
+	// 立即记录一条初始化日志
+	logs.Info("===== 日志系统初始化成功 =====")
+	logs.Info("日志文件: %s", gFlashSellConf.logConf.path)
+	logs.Info("日志级别: %s", gFlashSellConf.logConf.level)
 	return nil
 }
 func initRedis() error {
+	logs.Info("===== 开始初始化Redis连接 =====")
 	pool = &redis.Pool{
 		MaxIdle:     gFlashSellConf.redisConf.maxIdle,
 		MaxActive:   gFlashSellConf.redisConf.maxActive,
@@ -230,22 +223,17 @@ func initRedis() error {
 	}
 	conn := pool.Get()
 	defer conn.Close()
-	_, err := conn.Do("ping")
-	if err != nil {
-		logs.Error("ping redis failed, err:", err)
-		return err
-	}
-	isCluster, err := isRedisCluster(conn)
-	if err != nil {
-		log.Fatalf("检测Redis模式失败: %v", err)
-	}
 
-	// 打印关键信息
-	fmt.Println("===== Redis 关键信息 =====")
-	if isCluster {
-		printClusterSummary(conn)
-	} else {
-		printStandaloneSummary(conn)
+	if _, err := conn.Do("PING"); err != nil {
+		logs.Error("Redis Ping失败: %v", err)
+		return fmt.Errorf("Redis连接测试失败: %w", err)
+	}
+	logs.Info("Redis连接成功: %s", gFlashSellConf.redisConf.addr)
+
+	// 打印Redis信息
+	if err := printRedisInfo(conn); err != nil {
+		logs.Warn("获取Redis信息失败: %v", err)
+		// 不中断初始化，只记录警告
 	}
 
 	return nil
@@ -282,7 +270,7 @@ func initEtcd() (err error) {
 
 	return nil
 }
-func InitConfig() (err error) {
+func loadConfig() (err error) {
 	redisAddr := beego.AppConfig.String("redis_addr")
 	redisMaxIdle, _ := beego.AppConfig.Int("redis_max_idle")
 	redisMaxActive, _ := beego.AppConfig.Int("redis_max_active")
@@ -294,6 +282,10 @@ func InitConfig() (err error) {
 
 	logPath := beego.AppConfig.String("log_path")
 	logLevel := beego.AppConfig.String("log_level")
+
+	if redisAddr == "" || etcdAddr == "" || logPath == "" {
+		return fmt.Errorf("缺少必要配置: redis_addr=%s, etcd_addr=%s, log_path=%s", redisAddr, etcdAddr, logPath)
+	}
 
 	gFlashSellConf = &FlashSellConf{
 		redisConf: RedisConf{
@@ -313,31 +305,35 @@ func InitConfig() (err error) {
 			level: logLevel,
 		},
 	}
-	logs.Debug("config: %+v", gFlashSellConf)
-	if len(redisAddr) == 0 || len(etcdAddr) == 0 {
-		err = fmt.Errorf("redis addr or etcd addr empty", redisAddr, etcdAddr)
-		return err
-	}
-	err = initLog()
-	if err != nil {
-		logs.Error("init log failed, err:", err)
-		err = fmt.Errorf("init log failed, err:%v", err)
-		return err
+	return nil
+}
+func InitConfig() (err error) {
+	// 1. 首先加载基本配置
+	if err := loadConfig(); err != nil {
+		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	err = initRedis()
-	if err != nil {
-		logs.Error("init redis failed, err:", err)
-		err = fmt.Errorf("init redis failed, err:%v", err)
-		return err
+	// 2. 立即初始化日志（最先初始化）
+	if err = initLog(); err != nil {
+		return fmt.Errorf("初始化日志失败: %w", err)
 	}
 
-	err = initEtcd()
-	if err != nil {
-		logs.Error("init etcd failed, err:", err)
-		err = fmt.Errorf("init etcd failed, err:%v", err)
-		return err
+	// 3. 使用日志记录配置信息
+	logs.Info("===== 加载配置成功 =====")
+	logs.Info("Redis地址: %s", gFlashSellConf.redisConf.addr)
+	logs.Info("Etcd地址: %s", gFlashSellConf.etcdConf.addr)
+	logs.Info("日志路径: %s", gFlashSellConf.logConf.path)
+	logs.Info("日志级别: %s", gFlashSellConf.logConf.level)
+
+	// 4.初始化redis
+	if err := initRedis(); err != nil {
+		return fmt.Errorf("初始化Redis失败: %w", err)
 	}
-	logs.Info("init succeed")
+
+	// 5. 初始化Etcd
+	if err := initEtcd(); err != nil {
+		return fmt.Errorf("初始化Etcd失败: %w", err)
+	}
+	logs.Info("===== 所有组件初始化成功 =====")
 	return nil
 }
