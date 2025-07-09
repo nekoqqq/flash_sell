@@ -12,16 +12,19 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type FlashSellConf struct {
-	redisConf RedisConf
-	etcdConf  EtcdConf
-	logConf   LogConf
+	redisConf        RedisConf
+	etcdConf         ETCDConf
+	logConf          LogConf
+	etcdProductInfos []ETCDProductInfo
+	lock             sync.RWMutex
 }
 
-type FlashSellInfoConf struct {
+type ETCDProductInfo struct {
 	ProductId int       `json:"product_id"`
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `json:"end_time"`
@@ -36,7 +39,7 @@ type RedisConf struct {
 	idleTimeOut time.Duration
 }
 
-type EtcdConf struct {
+type ETCDConf struct {
 	addr        string
 	dialTimeout time.Duration
 	userName    string
@@ -304,7 +307,7 @@ func loadConfig() (err error) {
 			maxActive:   redisMaxActive,
 			idleTimeOut: time.Duration(redisIdleTimeout) * time.Second,
 		},
-		etcdConf: EtcdConf{
+		etcdConf: ETCDConf{
 			addr:        etcdAddr,
 			dialTimeout: time.Duration(etcdDialTimeout) * time.Second,
 			userName:    etcdUserName,
@@ -319,10 +322,9 @@ func loadConfig() (err error) {
 	logs.Info("配置信息: %+v", gFlashSellConf)
 	return nil
 }
-
-func loadFlashSellConf() error {
+func saveETCDConf() error {
 	// save
-	confs := []FlashSellInfoConf{
+	confs := []ETCDProductInfo{
 		{
 			ProductId: 1,
 			StartTime: time.Date(2025, 7, 25, 13, 0, 0, 0, time.UTC),
@@ -351,9 +353,11 @@ func loadFlashSellConf() error {
 	if err != nil {
 		return fmt.Errorf("保存到etcd失败: %w", err)
 	}
-	logs.Info("保存秒杀配置成功, 商品ID: %d, 路径: %s", confs[0].ProductId, key)
-
-	key = fmt.Sprintf("%s/product", gFlashSellConf.etcdConf.key)
+	logs.Info("保存秒杀配置成功, 商品ID0: %d, 路径: %s", confs[0].ProductId, key)
+	return nil
+}
+func loadETCDConf() (err error) {
+	key := fmt.Sprintf("%s/product", gFlashSellConf.etcdConf.key)
 	resp, err := etcdClient.Get(context.Background(), key)
 	if err != nil {
 		logs.Error("get [%s] from etcd failed, err: %v", key, err)
@@ -362,9 +366,45 @@ func loadFlashSellConf() error {
 	for _, v := range resp.Kvs {
 		logs.Debug("key: %s, value: %s", v.Key, v.Value)
 	}
+	// 反序列化为配置数组
 
+	if err := json.Unmarshal(resp.Kvs[0].Value, &gFlashSellConf.etcdProductInfos); err != nil {
+		return fmt.Errorf("解析配置失败: %w", err)
+	}
 	return nil
 }
+func watchETCDConf() error {
+	key := fmt.Sprintf("%s/product", gFlashSellConf.etcdConf.key)
+	logs.Info("开始监听配置变化: %s", key)
+
+	rch := etcdClient.Watch(context.Background(), key)
+	for resp := range rch {
+		for _, ev := range resp.Events {
+			switch ev.Type {
+			case etcd.EventTypePut:
+				logs.Info("检测到配置更新: %s", ev.Kv.Key)
+				var newConfs []ETCDProductInfo
+				if err := json.Unmarshal(ev.Kv.Value, &newConfs); err != nil {
+					logs.Error("解析新配置失败: %v", err)
+					continue
+				}
+				gFlashSellConf.lock.Lock()
+				gFlashSellConf.etcdProductInfos = newConfs
+				gFlashSellConf.lock.Unlock()
+				logs.Info("配置更新成功! 新配置: %+v", newConfs)
+
+			case etcd.EventTypeDelete:
+				logs.Warn("配置被删除: %s", ev.Kv.Key)
+				//gFlashSellConf.lock.Lock()
+				gFlashSellConf.etcdProductInfos = []ETCDProductInfo{}
+				//gFlashSellConf.lock.Unlock()
+				logs.Warn("已清空秒杀配置")
+			}
+		}
+	}
+	return nil
+}
+
 func InitConfig() (err error) {
 	// 1. 首先加载基本配置
 	if err := loadConfig(); err != nil {
@@ -393,10 +433,17 @@ func InitConfig() (err error) {
 		return fmt.Errorf("初始化Etcd失败: %w", err)
 	}
 
-	// 6. ETCD配置读取
-	if err := loadFlashSellConf(); err != nil {
+	// 6. ETCD配置写入和读取
+	//if err = saveETCDConf(); err != nil {
+	//	return fmt.Errorf("写入Etcd失败: %w", err)
+	//}
+	if err := loadETCDConf(); err != nil {
 		return fmt.Errorf("读取Etcd失败: %w", err)
 	}
+	// 7. 启动ETCD配置监听
+	go watchETCDConf()
+
 	logs.Info("===== 所有组件初始化成功 =====")
+	logs.Info("全局配置信息: %v", gFlashSellConf)
 	return nil
 }
