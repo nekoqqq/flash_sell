@@ -13,3 +13,16 @@ const (
 	ProductSoldOut      = 1 // 商品已经售光
 	ProductForceSoldOut = 2 // 强制商品已经售卖光
 )
+
+func (p ProductStatus) String() string {
+	switch p {
+	case ProductNormal:
+		return "ProductNormal"
+	case ProductSoldOut:
+		return "ProductSoldOut"
+	case ProductForceSoldOut:
+		return "ProductForceSoldOut"
+	default:
+		return "ProductInvalid"
+	}
+}

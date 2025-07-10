@@ -29,7 +29,7 @@ func FlashSellInfo(productId int) (map[string]interface{}, int, error) {
 
 		data["start"] = isStart // 可能和客户端的时间不一致，所以没法直接用这个时间
 		data["end"] = isEnd
-		data["status"] = value.Status // 是否可以买，如果不可以买，前端就置成灰色了
+		data["status"] = value.Status.String() // 是否可以买，如果不可以买，前端就置成灰色了
 	}
 
 	return data, flash_sell.Succeed, nil
