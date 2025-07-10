@@ -3,6 +3,7 @@ package conf
 import (
 	"context"
 	"encoding/json"
+	"flash_sell"
 	"flash_sell/utils"
 	"fmt"
 	"github.com/astaxie/beego"
@@ -25,11 +26,11 @@ type FlashSellConf struct {
 }
 
 type ETCDProductInfo struct {
-	ProductId int       `json:"product_id"`
-	StartTime time.Time `json:"start_time"`
-	EndTime   time.Time `json:"end_time"`
-	Status    int       `json:"status"` // 0: 未上架, 1: 已上架, 2: 卖完, 3: 已删除
-	Stock     int       `json:"stock"`
+	ProductId int                      `json:"product_id"`
+	StartTime time.Time                `json:"start_time"`
+	EndTime   time.Time                `json:"end_time"`
+	Status    flash_sell.ProductStatus `json:"status"` // 0: 未上架, 1: 已上架, 2: 卖完, 3: 已删除
+	Stock     int                      `json:"stock"`
 }
 
 type RedisConf struct {
@@ -329,14 +330,14 @@ func saveETCDConf() error {
 			ProductId: 1,
 			StartTime: time.Date(2025, 7, 25, 13, 0, 0, 0, time.UTC),
 			EndTime:   time.Date(2025, 7, 25, 13, 0, 0, 0, time.UTC).Add(time.Hour),
-			Status:    1,
+			Status:    flash_sell.ProductNormal,
 			Stock:     500,
 		},
 		2: {
 			ProductId: 2,
 			StartTime: time.Date(2025, 7, 25, 14, 0, 0, 0, time.UTC),
 			EndTime:   time.Date(2025, 7, 25, 14, 0, 0, 0, time.UTC).Add(time.Hour),
-			Status:    1,
+			Status:    flash_sell.ProductNormal,
 			Stock:     300,
 		},
 	}
