@@ -388,9 +388,9 @@ func watchETCDConf() error {
 					logs.Error("解析新配置失败: %v", err)
 					continue
 				}
-				gFlashSellConf.lock.Lock()
+				//gFlashSellConf.lock.Lock()
 				gFlashSellConf.etcdProductInfos = newConfs
-				gFlashSellConf.lock.Unlock()
+				//gFlashSellConf.lock.Unlock()
 				logs.Info("配置更新成功! 新配置: %+v", newConfs)
 
 			case etcd.EventTypeDelete:

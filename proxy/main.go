@@ -2,7 +2,7 @@ package main
 
 import (
 	"flash_sell"
-	"flash_sell/Proxy/controller"
+	"flash_sell/proxy/controller"
 	"github.com/astaxie/beego"
 	"log"
 	"net/http"
