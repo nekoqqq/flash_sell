@@ -1,7 +1,7 @@
 package main
 
 import (
-	"flash_sell"
+	"flash_sell/conf"
 	"flash_sell/proxy/controller"
 	"github.com/astaxie/beego"
 	"log"
@@ -10,7 +10,7 @@ import (
 import _ "net/http/pprof"
 
 func main() {
-	err := flash_sell.InitConfig()
+	err := conf.InitConfig()
 	if err != nil {
 		panic(err)
 	}

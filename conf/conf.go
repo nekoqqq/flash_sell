@@ -1,4 +1,4 @@
-package flash_sell
+package conf
 
 import (
 	"context"
@@ -20,7 +20,7 @@ type FlashSellConf struct {
 	redisConf        RedisConf
 	etcdConf         ETCDConf
 	logConf          LogConf
-	etcdProductInfos []ETCDProductInfo
+	EtcdProductInfos map[int]ETCDProductInfo
 	lock             sync.RWMutex
 }
 
@@ -52,7 +52,7 @@ type LogConf struct {
 }
 
 var (
-	gFlashSellConf *FlashSellConf
+	GFlashSellConf *FlashSellConf
 	pool           *redis.Pool
 	etcdClient     *etcd.Client
 )
@@ -195,8 +195,8 @@ func printCapacityInfo(memStats map[string]string, keyspaceStats map[string]stri
 
 func initLog() error {
 	config := make(map[string]interface{})
-	config["filename"] = gFlashSellConf.logConf.path
-	switch strings.ToLower(gFlashSellConf.logConf.level) {
+	config["filename"] = GFlashSellConf.logConf.path
+	switch strings.ToLower(GFlashSellConf.logConf.level) {
 	case "debug":
 		config["level"] = logs.LevelDebug
 	case "info":
@@ -219,16 +219,16 @@ func initLog() error {
 	}
 	// 立即记录一条初始化日志
 	logs.Info("===== 日志系统初始化成功 =====")
-	logs.Info("日志文件: %s", gFlashSellConf.logConf.path)
-	logs.Info("日志级别: %s", gFlashSellConf.logConf.level)
+	logs.Info("日志文件: %s", GFlashSellConf.logConf.path)
+	logs.Info("日志级别: %s", GFlashSellConf.logConf.level)
 	return nil
 }
 func initRedis() error {
 	logs.Info("===== 开始初始化Redis连接 =====")
 	pool = &redis.Pool{
-		MaxIdle:     gFlashSellConf.redisConf.maxIdle,
-		MaxActive:   gFlashSellConf.redisConf.maxActive,
-		IdleTimeout: gFlashSellConf.redisConf.idleTimeOut,
+		MaxIdle:     GFlashSellConf.redisConf.maxIdle,
+		MaxActive:   GFlashSellConf.redisConf.maxActive,
+		IdleTimeout: GFlashSellConf.redisConf.idleTimeOut,
 		Dial: func() (redis.Conn, error) {
 			return redis.Dial("tcp", "localhost:6379")
 		},
@@ -240,7 +240,7 @@ func initRedis() error {
 		logs.Error("Redis Ping失败: %v", err)
 		return fmt.Errorf("Redis连接测试失败: %w", err)
 	}
-	logs.Info("Redis连接成功: %s", gFlashSellConf.redisConf.addr)
+	logs.Info("Redis连接成功: %s", GFlashSellConf.redisConf.addr)
 
 	// 打印Redis信息
 	if err := printRedisInfo(conn); err != nil {
@@ -252,10 +252,10 @@ func initRedis() error {
 }
 func initEtcd() (err error) {
 	config := etcd.Config{
-		Endpoints:   []string{gFlashSellConf.etcdConf.addr}, // etcd 节点地址
-		DialTimeout: gFlashSellConf.etcdConf.dialTimeout,    // 连接超时时间
-		Username:    gFlashSellConf.etcdConf.userName,       // 用户名（如果启用认证）
-		Password:    gFlashSellConf.etcdConf.password,       // 密码（如果启用认证）
+		Endpoints:   []string{GFlashSellConf.etcdConf.addr}, // etcd 节点地址
+		DialTimeout: GFlashSellConf.etcdConf.dialTimeout,    // 连接超时时间
+		Username:    GFlashSellConf.etcdConf.userName,       // 用户名（如果启用认证）
+		Password:    GFlashSellConf.etcdConf.password,       // 密码（如果启用认证）
 	}
 
 	// 创建 etcd 客户端
@@ -300,7 +300,7 @@ func loadConfig() (err error) {
 		return fmt.Errorf("缺少必要配置: redis_addr=%s, etcd_addr=%s, log_path=%s", redisAddr, etcdAddr, logPath)
 	}
 
-	gFlashSellConf = &FlashSellConf{
+	GFlashSellConf = &FlashSellConf{
 		redisConf: RedisConf{
 			addr:        redisAddr,
 			maxIdle:     redisMaxIdle,
@@ -319,20 +319,20 @@ func loadConfig() (err error) {
 			level: logLevel,
 		},
 	}
-	logs.Info("配置信息: %+v", gFlashSellConf)
+	logs.Info("配置信息: %+v", GFlashSellConf)
 	return nil
 }
 func saveETCDConf() error {
 	// save
-	confs := []ETCDProductInfo{
-		{
+	confs := map[int]ETCDProductInfo{
+		1: {
 			ProductId: 1,
 			StartTime: time.Date(2025, 7, 25, 13, 0, 0, 0, time.UTC),
 			EndTime:   time.Date(2025, 7, 25, 13, 0, 0, 0, time.UTC).Add(time.Hour),
 			Status:    1,
 			Stock:     500,
 		},
-		{
+		2: {
 			ProductId: 2,
 			StartTime: time.Date(2025, 7, 25, 14, 0, 0, 0, time.UTC),
 			EndTime:   time.Date(2025, 7, 25, 14, 0, 0, 0, time.UTC).Add(time.Hour),
@@ -348,7 +348,7 @@ func saveETCDConf() error {
 	// 保存到 etcd
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	key := fmt.Sprintf("%s/product", gFlashSellConf.etcdConf.key)
+	key := fmt.Sprintf("%s/product", GFlashSellConf.etcdConf.key)
 	_, err = etcdClient.Put(ctx, key, string(data))
 	if err != nil {
 		return fmt.Errorf("保存到etcd失败: %w", err)
@@ -357,7 +357,7 @@ func saveETCDConf() error {
 	return nil
 }
 func loadETCDConf() (err error) {
-	key := fmt.Sprintf("%s/product", gFlashSellConf.etcdConf.key)
+	key := fmt.Sprintf("%s/product", GFlashSellConf.etcdConf.key)
 	resp, err := etcdClient.Get(context.Background(), key)
 	if err != nil {
 		logs.Error("get [%s] from etcd failed, err: %v", key, err)
@@ -368,13 +368,14 @@ func loadETCDConf() (err error) {
 	}
 	// 反序列化为配置数组
 
-	if err := json.Unmarshal(resp.Kvs[0].Value, &gFlashSellConf.etcdProductInfos); err != nil {
+	if err := json.Unmarshal(resp.Kvs[0].Value, &GFlashSellConf.EtcdProductInfos); err != nil {
+		logs.Error("反序列化失败")
 		return fmt.Errorf("解析配置失败: %w", err)
 	}
 	return nil
 }
 func watchETCDConf() error {
-	key := fmt.Sprintf("%s/product", gFlashSellConf.etcdConf.key)
+	key := fmt.Sprintf("%s/product", GFlashSellConf.etcdConf.key)
 	logs.Info("开始监听配置变化: %s", key)
 
 	rch := etcdClient.Watch(context.Background(), key)
@@ -383,21 +384,21 @@ func watchETCDConf() error {
 			switch ev.Type {
 			case etcd.EventTypePut:
 				logs.Info("检测到配置更新: %s", ev.Kv.Key)
-				var newConfs []ETCDProductInfo
+				var newConfs = make(map[int]ETCDProductInfo)
 				if err := json.Unmarshal(ev.Kv.Value, &newConfs); err != nil {
 					logs.Error("解析新配置失败: %v", err)
 					continue
 				}
-				//gFlashSellConf.lock.Lock()
-				gFlashSellConf.etcdProductInfos = newConfs
-				//gFlashSellConf.lock.Unlock()
+				//GFlashSellConf.lock.Lock()
+				GFlashSellConf.EtcdProductInfos = newConfs
+				//GFlashSellConf.lock.Unlock()
 				logs.Info("配置更新成功! 新配置: %+v", newConfs)
 
 			case etcd.EventTypeDelete:
 				logs.Warn("配置被删除: %s", ev.Kv.Key)
-				//gFlashSellConf.lock.Lock()
-				gFlashSellConf.etcdProductInfos = []ETCDProductInfo{}
-				//gFlashSellConf.lock.Unlock()
+				//GFlashSellConf.lock.Lock()
+				GFlashSellConf.EtcdProductInfos = nil
+				//GFlashSellConf.lock.Unlock()
 				logs.Warn("已清空秒杀配置")
 			}
 		}
@@ -418,10 +419,10 @@ func InitConfig() (err error) {
 
 	// 3. 使用日志记录配置信息
 	logs.Info("===== 加载配置成功 =====")
-	logs.Info("Redis地址: %s", gFlashSellConf.redisConf.addr)
-	logs.Info("Etcd地址: %s", gFlashSellConf.etcdConf.addr)
-	logs.Info("日志路径: %s", gFlashSellConf.logConf.path)
-	logs.Info("日志级别: %s", gFlashSellConf.logConf.level)
+	logs.Info("Redis地址: %s", GFlashSellConf.redisConf.addr)
+	logs.Info("Etcd地址: %s", GFlashSellConf.etcdConf.addr)
+	logs.Info("日志路径: %s", GFlashSellConf.logConf.path)
+	logs.Info("日志级别: %s", GFlashSellConf.logConf.level)
 
 	// 4.初始化redis
 	if err := initRedis(); err != nil {
@@ -440,10 +441,11 @@ func InitConfig() (err error) {
 	if err := loadETCDConf(); err != nil {
 		return fmt.Errorf("读取Etcd失败: %w", err)
 	}
+
 	// 7. 启动ETCD配置监听
 	go watchETCDConf()
 
 	logs.Info("===== 所有组件初始化成功 =====")
-	logs.Info("全局配置信息: %v", gFlashSellConf)
+	logs.Info("全局配置信息: %v", GFlashSellConf)
 	return nil
 }
