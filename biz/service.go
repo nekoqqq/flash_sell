@@ -18,18 +18,27 @@ func FlashSellInfo(productId int) (map[string]interface{}, int, error) {
 		logs.Error("product_id: %v不存在配置中心中", productId)
 	} else {
 		logs.Debug("获取配置成功, product: %v, 配置: %v", productId, value)
-		isStart, isEnd := false, false
+		isStart, isEnd, status := false, false, "活动尚未开始"
+		productStatus := value.Status
 
-		if (time.Now().Sub(value.StartTime)) > 0 {
-			isStart = true
-		}
-		if (time.Now().Sub(value.EndTime)) > 0 {
-			isStart, isEnd = false, true
+		if productStatus != flash_sell.ProductNormal {
+			status = productStatus.String()
+		} else {
+			now := time.Now()
+			if now.Sub(value.StartTime) > 0 {
+				isStart = true
+				status = "活动开始"
+			}
+
+			if now.Sub(value.EndTime) > 0 {
+				isStart, isEnd = false, true
+				status = "活动已经结束"
+			}
 		}
 
 		data["start"] = isStart // 可能和客户端的时间不一致，所以没法直接用这个时间
 		data["end"] = isEnd
-		data["status"] = value.Status.String() // 是否可以买，如果不可以买，前端就置成灰色了
+		data["status"] = status // 是否可以买，如果不可以买，前端就置成灰色了
 	}
 
 	return data, flash_sell.Succeed, nil

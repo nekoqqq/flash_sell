@@ -328,15 +328,15 @@ func saveETCDConf() error {
 	confs := map[int]ETCDProductInfo{
 		1: {
 			ProductId: 1,
-			StartTime: time.Date(2025, 7, 25, 13, 0, 0, 0, time.UTC),
-			EndTime:   time.Date(2025, 7, 25, 13, 0, 0, 0, time.UTC).Add(time.Hour),
+			StartTime: time.Date(2025, 7, 10, 13, 0, 0, 0, time.Local),
+			EndTime:   time.Date(2025, 7, 25, 13, 0, 0, 0, time.Local).Add(time.Hour),
 			Status:    flash_sell.ProductNormal,
 			Stock:     500,
 		},
 		2: {
 			ProductId: 2,
-			StartTime: time.Date(2025, 7, 25, 14, 0, 0, 0, time.UTC),
-			EndTime:   time.Date(2025, 7, 25, 14, 0, 0, 0, time.UTC).Add(time.Hour),
+			StartTime: time.Date(2025, 7, 25, 14, 0, 0, 0, time.Local),
+			EndTime:   time.Date(2025, 7, 25, 14, 0, 0, 0, time.Local).Add(time.Hour),
 			Status:    flash_sell.ProductNormal,
 			Stock:     300,
 		},
@@ -436,9 +436,9 @@ func InitConfig() (err error) {
 	}
 
 	// 6. ETCD配置写入和读取
-	//if err = saveETCDConf(); err != nil {
-	//	return fmt.Errorf("写入Etcd失败: %w", err)
-	//}
+	if err = saveETCDConf(); err != nil {
+		return fmt.Errorf("写入Etcd失败: %w", err)
+	}
 	if err := loadETCDConf(); err != nil {
 		return fmt.Errorf("读取Etcd失败: %w", err)
 	}
