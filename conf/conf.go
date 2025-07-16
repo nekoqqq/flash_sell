@@ -18,13 +18,18 @@ import (
 )
 
 type FlashSellConf struct {
-	redisConf        RedisConf
-	etcdConf         ETCDConf
-	logConf          LogConf
-	EtcdProductInfos map[int]ETCDProductInfo
-	CookieSecretKey  string
-	UserAccessLimit  int
-	lock             sync.RWMutex
+	redisConf         RedisConf
+	redisBlackConf    RedisConf // 存放黑名单的Redis
+	etcdConf          ETCDConf
+	logConf           LogConf
+	EtcdProductInfos  map[int]ETCDProductInfo
+	CookieSecretKey   string
+	UserAccessLimit   int
+	UserIpAccessLimit int
+	ReferWhitelist    []string
+	lock              sync.RWMutex
+	IPBlackMap        map[string]bool
+	UserIDBlackMap    map[int]bool
 }
 
 type ETCDProductInfo struct {
@@ -285,11 +290,73 @@ func initEtcd() (err error) {
 
 	return nil
 }
+func initBlackList() (err error) {
+	logs.Info("===== 开始初始化黑名单Redis连接 =====")
+	pool = &redis.Pool{
+		MaxIdle:     GFlashSellConf.redisBlackConf.maxIdle,
+		MaxActive:   GFlashSellConf.redisBlackConf.maxActive,
+		IdleTimeout: GFlashSellConf.redisBlackConf.idleTimeOut,
+		Dial: func() (redis.Conn, error) {
+			return redis.Dial("tcp", GFlashSellConf.redisBlackConf.addr)
+		},
+	}
+	conn := pool.Get()
+	defer conn.Close()
+
+	if _, err := conn.Do("PING"); err != nil {
+		logs.Error("黑名单Redis Ping失败: %v", err)
+		return fmt.Errorf("黑名单Redis连接测试失败: %w", err)
+	}
+	logs.Info("黑名单Redis连接成功: %s", GFlashSellConf.redisConf.addr)
+
+	// 打印Redis信息
+	if err := printRedisInfo(conn); err != nil {
+		logs.Warn("获取黑名单Redis信息失败: %v", err)
+		// 不中断初始化，只记录警告
+	}
+	reply, err := conn.Do("hgetall", "user_id_blacklist")
+	if err != nil {
+		logs.Warn("hget all failed, err: %v", err)
+		return err
+	}
+
+	// 用户id黑名单加载
+	userIdBlackList, err := redis.Strings(reply, err)
+	if err != nil {
+		logs.Warn("hget all failed from reply, err: %v", err)
+		return err
+	}
+	for _, v := range userIdBlackList {
+		id, err := strconv.Atoi(v)
+		if err != nil {
+			logs.Warn("hget convert id failed, err: %v", err)
+			continue
+		}
+		GFlashSellConf.UserIDBlackMap[id] = true
+	}
+	// ip黑名单加载
+	reply, err = conn.Do("hgetall", "ip_blacklist")
+	IPBlackList, err := redis.Strings(reply, err)
+	if err != nil {
+		logs.Warn("IP hget all failed from reply, err: %v", err)
+		return err
+	}
+	for _, ip := range IPBlackList {
+		GFlashSellConf.IPBlackMap[ip] = true
+	}
+	return nil
+}
 func loadConfig() (err error) {
 	redisAddr := beego.AppConfig.String("redis_addr")
 	redisMaxIdle, _ := beego.AppConfig.Int("redis_max_idle")
 	redisMaxActive, _ := beego.AppConfig.Int("redis_max_active")
 	redisIdleTimeout, _ := beego.AppConfig.Int("redis_idle_timeout")
+
+	redisBlackAddr := beego.AppConfig.String("redis_black_addr")
+	redisBlackMaxIdle, _ := beego.AppConfig.Int("redis_black_max_idle")
+	redisBlackMaxActive, _ := beego.AppConfig.Int("redis_black_max_active")
+	redisBlackIdleTimeout, _ := beego.AppConfig.Int("redis_black_idle_timeout")
+
 	etcdAddr := beego.AppConfig.String("etcd_addr")
 	etcdDialTimeout, _ := beego.AppConfig.Int("etcd_dial_timeout")
 	etcdUserName := beego.AppConfig.String("etcd_user_name")
@@ -301,9 +368,11 @@ func loadConfig() (err error) {
 
 	cookieSecretKey := beego.AppConfig.String("cookie_secret_key")
 	userAccessLimit, _ := beego.AppConfig.Int("user_access_limit")
+	referWhiteList := beego.AppConfig.Strings("refer_whitelist") // 默认使用;进行分割
+	userIPAccessLimit, _ := beego.AppConfig.Int("user_ip_access_limit")
 
-	if redisAddr == "" || etcdAddr == "" || logPath == "" || cookieSecretKey == "" || userAccessLimit == 0 {
-		return fmt.Errorf("缺少必要配置: redis_addr=%s, etcd_addr=%s, log_path=%s, cookie_secret_key=%s, user_access_limit=%d", redisAddr, etcdAddr, logPath, cookieSecretKey, userAccessLimit)
+	if redisAddr == "" || redisBlackAddr == "" || etcdAddr == "" || logPath == "" || cookieSecretKey == "" || userAccessLimit == 0 || referWhiteList == nil || userIPAccessLimit == 0 {
+		return fmt.Errorf("缺少必要配置: redis_addr=%s, etcd_addr=%s, log_path=%s, cookie_secret_key=%s, user_access_limit=%d, referWhiteList=%v, userIPAccessLimit=%v", redisAddr, etcdAddr, logPath, cookieSecretKey, userAccessLimit, referWhiteList, redisAddr, userIPAccessLimit)
 	}
 
 	GFlashSellConf = &FlashSellConf{
@@ -312,6 +381,12 @@ func loadConfig() (err error) {
 			maxIdle:     redisMaxIdle,
 			maxActive:   redisMaxActive,
 			idleTimeOut: time.Duration(redisIdleTimeout) * time.Second,
+		},
+		redisBlackConf: RedisConf{
+			addr:        redisBlackAddr,
+			maxIdle:     redisBlackMaxIdle,
+			maxActive:   redisBlackMaxActive,
+			idleTimeOut: time.Duration(redisBlackIdleTimeout) * time.Second,
 		},
 		etcdConf: ETCDConf{
 			addr:        etcdAddr,
@@ -324,8 +399,10 @@ func loadConfig() (err error) {
 			path:  logPath,
 			level: logLevel,
 		},
-		CookieSecretKey: cookieSecretKey,
-		UserAccessLimit: userAccessLimit,
+		CookieSecretKey:   cookieSecretKey,
+		UserAccessLimit:   userAccessLimit,
+		ReferWhitelist:    referWhiteList,
+		UserIpAccessLimit: userIPAccessLimit,
 	}
 	logs.Info("配置信息: %+v", GFlashSellConf)
 	return nil
@@ -437,12 +514,17 @@ func InitConfig() (err error) {
 		return fmt.Errorf("初始化Redis失败: %w", err)
 	}
 
-	// 5. 初始化Etcd
+	// 5. 初始化黑名单redis
+	if err := initBlackList(); err != nil {
+		return fmt.Errorf("初始化黑名单失败: %w", err)
+	}
+
+	// 6. 初始化Etcd
 	if err := initEtcd(); err != nil {
 		return fmt.Errorf("初始化Etcd失败: %w", err)
 	}
 
-	// 6. ETCD配置写入和读取
+	// 7. ETCD配置写入和读取
 	if err = saveETCDConf(); err != nil {
 		return fmt.Errorf("写入Etcd失败: %w", err)
 	}
@@ -450,7 +532,7 @@ func InitConfig() (err error) {
 		return fmt.Errorf("读取Etcd失败: %w", err)
 	}
 
-	// 7. 启动ETCD配置监听
+	// 8. 启动ETCD配置监听
 	go watchETCDConf()
 
 	logs.Info("===== 所有组件初始化成功 =====")

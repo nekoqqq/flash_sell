@@ -29,10 +29,13 @@ type Req struct {
 	UserId       int
 	UserAuthSign string
 	AccessTime   time.Time // 访问时间
+	ClientIp     string
+	ClientRef    string // 用户从哪个页面进行的访问
 }
 
 type FreqControlMap struct {
-	userControl map[int]*FreqLimit // 每个用户当前时间的访问频次
+	userControl map[int]*FreqLimit    // 每个用户当前时间的访问频次
+	IPControl   map[string]*FreqLimit // 每个IP当前的访问频次
 	lock        sync.Mutex
 }
 
@@ -65,6 +68,18 @@ func FlashSell(req *Req) (map[string]interface{}, int, error) {
 
 	// 1. 用户信息检查
 	err := func() error {
+		found := false
+		for _, refer := range conf.GFlashSellConf.ReferWhitelist {
+			if refer == req.ClientRef {
+				found = true
+				break
+			}
+		}
+		if !found {
+			logs.Warn("invalid user: %v refer: %v", req.UserId, req.ClientRef)
+			return fmt.Errorf("invalid user refer: %v", req.ClientRef)
+		}
+
 		authData := fmt.Sprintf("%d:%s", req.UserId, conf.GFlashSellConf.CookieSecretKey)
 		authSign := fmt.Sprintf("%x", md5.Sum([]byte(authData)))
 		logs.Debug("req: %v, authData: %v, authSign: %v", req, authData, authSign)
@@ -79,10 +94,11 @@ func FlashSell(req *Req) (map[string]interface{}, int, error) {
 		return nil, flash_sell.InvalidUser, nil
 	}
 
-	// 2. 用户反作弊
+	// 2. 用户反作弊,包含访问频次+IP维度
 	err = func() error {
 		gFreqControlMap.lock.Lock()
 		defer gFreqControlMap.lock.Unlock()
+		// 用户访问次数控制
 		freqLimit, ok := gFreqControlMap.userControl[req.UserId]
 		if !ok {
 			freqLimit = &FreqLimit{}
@@ -91,8 +107,23 @@ func FlashSell(req *Req) (map[string]interface{}, int, error) {
 		accessCount := freqLimit.DoCount(req.AccessTime)
 		fmt.Printf("Access Count: %d\n", accessCount)
 		if accessCount > conf.GFlashSellConf.UserAccessLimit {
+
 			return fmt.Errorf("user access limit exceeded")
 		}
+
+		// IP控制
+		IPFreqLimit, ok := gFreqControlMap.IPControl[req.ClientIp]
+		if !ok {
+			IPFreqLimit = &FreqLimit{}
+			gFreqControlMap.IPControl[req.ClientIp] = IPFreqLimit
+		}
+		IPAccessCount := IPFreqLimit.DoCount(req.AccessTime)
+		fmt.Printf("IP Access Count: %d\n", IPAccessCount)
+		if accessCount > conf.GFlashSellConf.UserIpAccessLimit {
+
+			return fmt.Errorf("IP access limit exceeded")
+		}
+
 		return nil
 	}()
 	if err != nil {

@@ -43,6 +43,8 @@ func (c *FlashSellController) FlashSell() {
 		logs.Warn("请求参数错误，解析用户id失败, error: %v", err)
 		return
 	}
+	//clientIP := strings.Split(c.Ctx.Request.RemoteAddr, ":")[0]
+	//clientRef := c.Ctx.Request.Referer()
 
 	req := &biz.Req{
 		ProductId:    productId,
