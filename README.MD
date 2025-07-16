@@ -1,5 +1,6 @@
 # 秒杀系统
 ## 功能
+B站地址：https://www.bilibili.com/video/BV1et4y1i7LY?spm_id_from=333.788.videopod.episodes&vd_source=cbcadb24e844b9cc1386d63e2ab293df
 电商商品限制数量，同时多个用户进行抢购
 ## 接口定义
 
