@@ -22,6 +22,8 @@ type FlashSellConf struct {
 	etcdConf         ETCDConf
 	logConf          LogConf
 	EtcdProductInfos map[int]ETCDProductInfo
+	CookieSecretKey  string
+	UserAccessLimit  int
 	lock             sync.RWMutex
 }
 
@@ -297,8 +299,11 @@ func loadConfig() (err error) {
 	logPath := beego.AppConfig.String("log_path")
 	logLevel := beego.AppConfig.String("log_level")
 
-	if redisAddr == "" || etcdAddr == "" || logPath == "" {
-		return fmt.Errorf("缺少必要配置: redis_addr=%s, etcd_addr=%s, log_path=%s", redisAddr, etcdAddr, logPath)
+	cookieSecretKey := beego.AppConfig.String("cookie_secret_key")
+	userAccessLimit, _ := beego.AppConfig.Int("user_access_limit")
+
+	if redisAddr == "" || etcdAddr == "" || logPath == "" || cookieSecretKey == "" || userAccessLimit == 0 {
+		return fmt.Errorf("缺少必要配置: redis_addr=%s, etcd_addr=%s, log_path=%s, cookie_secret_key=%s, user_access_limit=%d", redisAddr, etcdAddr, logPath, cookieSecretKey, userAccessLimit)
 	}
 
 	GFlashSellConf = &FlashSellConf{
@@ -319,6 +324,8 @@ func loadConfig() (err error) {
 			path:  logPath,
 			level: logLevel,
 		},
+		CookieSecretKey: cookieSecretKey,
+		UserAccessLimit: userAccessLimit,
 	}
 	logs.Info("配置信息: %+v", GFlashSellConf)
 	return nil

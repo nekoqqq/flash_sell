@@ -1,9 +1,11 @@
 package flash_sell
 
 const (
-	Succeed      = 0
-	InvalidParms = 100
-	ServiceError = 500
+	Succeed         = 0
+	InvalidParms    = 100
+	InvalidUser     = 200
+	UserFreqControl = 201
+	ServiceError    = 500
 )
 
 type ProductStatus int
