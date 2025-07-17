@@ -6,6 +6,8 @@ const (
 	InvalidUser     = 200
 	UserFreqControl = 201
 	ServiceError    = 500
+	EventNotStart   = 600
+	EventEnd        = 601
 )
 
 type ProductStatus int

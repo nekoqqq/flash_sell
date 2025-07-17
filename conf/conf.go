@@ -30,6 +30,8 @@ type FlashSellConf struct {
 	lock              sync.RWMutex
 	IPBlackMap        map[string]bool
 	UserIDBlackMap    map[int]bool
+	redisBlackPool    *redis.Pool
+	redisPool         *redis.Pool
 }
 
 type ETCDProductInfo struct {
@@ -255,6 +257,7 @@ func initRedis() error {
 		logs.Warn("获取Redis信息失败: %v", err)
 		// 不中断初始化，只记录警告
 	}
+	GFlashSellConf.redisPool = pool
 
 	return nil
 }
@@ -290,7 +293,7 @@ func initEtcd() (err error) {
 
 	return nil
 }
-func initBlackList() (err error) {
+func initRedisBlack() (err error) {
 	logs.Info("===== 开始初始化黑名单Redis连接 =====")
 	pool = &redis.Pool{
 		MaxIdle:     GFlashSellConf.redisBlackConf.maxIdle,
@@ -344,6 +347,59 @@ func initBlackList() (err error) {
 	for _, ip := range IPBlackList {
 		GFlashSellConf.IPBlackMap[ip] = true
 	}
+
+	// 同步ID
+	go func(pool *redis.Pool) {
+		var userIdBlackList []int
+		lastUpDateTime := time.Now()
+		for {
+			conn = pool.Get()
+			defer conn.Close()
+			reply, err := conn.Do("BLPOP", "user_id_blacklist", time.Second)
+			userId, err := redis.Int(reply, err)
+			userIdBlackList = append(userIdBlackList, userId)
+			if err != nil {
+				continue
+			}
+			curTime := time.Now()
+
+			// 每5秒更新或者用户名单超过10个
+			if curTime.Sub(lastUpDateTime) > 5*time.Second || len(userIdBlackList) > 10 {
+				for _, v := range userIdBlackList {
+					// TODO 这里暂时没加锁,不清楚是否会报错
+					GFlashSellConf.UserIDBlackMap[v] = true
+				}
+				logs.Info("从redis同步黑名单到全局map: %v", userIdBlackList)
+			}
+		}
+	}(pool)
+
+	// 同步黑名单
+	go func(pool *redis.Pool) {
+		var ipBlackList []string
+		lastUpDateTime := time.Now()
+		for {
+			conn = pool.Get()
+			defer conn.Close()
+			reply, err := conn.Do("BLPOP", "ip_blacklist", time.Second)
+			ip, err := redis.String(reply, err)
+			ipBlackList = append(ipBlackList, ip)
+			if err != nil {
+				continue
+			}
+			curTime := time.Now()
+
+			// 每5秒更新或者用户名单超过10个
+			if curTime.Sub(lastUpDateTime) > 5*time.Second || len(ipBlackList) > 10 {
+				for _, v := range ipBlackList {
+					// TODO 这里暂时没加锁,不清楚是否会报错
+					GFlashSellConf.IPBlackMap[v] = true
+				}
+				logs.Info("从redis同步IP黑名单到全局map: %v", ipBlackList)
+			}
+		}
+	}(pool)
+	GFlashSellConf.redisPool = pool
 	return nil
 }
 func loadConfig() (err error) {
@@ -515,7 +571,7 @@ func InitConfig() (err error) {
 	}
 
 	// 5. 初始化黑名单redis
-	if err := initBlackList(); err != nil {
+	if err := initRedisBlack(); err != nil {
 		return fmt.Errorf("初始化黑名单失败: %w", err)
 	}
 

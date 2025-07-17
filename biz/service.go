@@ -62,9 +62,9 @@ func (fl *FreqLimit) GetCount(curTime time.Time) int {
 	return fl.count
 }
 
-func FlashSell(req *Req) (map[string]interface{}, int, error) {
-	//data := map[int]interface{}{}
-	//errCode := flash_sell.Succeed
+func FlashSell(req *Req) (map[int]interface{}, int, error) {
+	data := map[int]interface{}{}
+	errCode := flash_sell.Succeed
 
 	// 1. 用户信息检查
 	err := func() error {
@@ -129,10 +129,14 @@ func FlashSell(req *Req) (map[string]interface{}, int, error) {
 	if err != nil {
 		errCode := flash_sell.UserFreqControl
 		logs.Warn("用户id: %v超过频率控制, req: %v, errCode: %v", req.UserId, req, errCode)
-		return nil, flash_sell.UserFreqControl, err
+		return data, flash_sell.UserFreqControl, err
 	}
 
-	return nil, flash_sell.Succeed, nil
+	data, errCode, err = FlashSellInfo(req.ProductId)
+	if err != nil || errCode != flash_sell.Succeed {
+		logs.Warn("查询用户信息失败, userid: %v, errCode: %v, err: %v", req.UserId, errCode, err)
+	}
+	return data, errCode, err
 }
 
 // FlashSellInfo 返回的配置信息，出错码，出错原因
@@ -142,6 +146,7 @@ func FlashSellInfo(productId int) (map[int]interface{}, int, error) {
 	var common = func(productId int, value conf.ETCDProductInfo) {
 		isStart, isEnd, status := false, false, "活动尚未开始"
 		productStatus := value.Status
+		errCode = flash_sell.EventNotStart
 
 		if productStatus != flash_sell.ProductNormal {
 			status = productStatus.String()
@@ -150,11 +155,13 @@ func FlashSellInfo(productId int) (map[int]interface{}, int, error) {
 			if now.Sub(value.StartTime) > 0 {
 				isStart = true
 				status = "活动开始"
+				errCode = flash_sell.Succeed
 			}
 
 			if now.Sub(value.EndTime) > 0 {
 				isStart, isEnd = false, true
 				status = "活动已经结束"
+				errCode = flash_sell.EventEnd
 			}
 		}
 		data[productId] = map[string]interface{}{
