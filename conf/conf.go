@@ -3,6 +3,7 @@ package conf
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flash_sell"
 	"flash_sell/utils"
 	"fmt"
@@ -16,6 +17,27 @@ import (
 	"sync"
 	"time"
 )
+
+type Resp struct {
+	Data      map[string]interface{} `json:"data"`
+	ErrorCode int                    `json:"error_code"`
+	ErrorMsg  string                 `json:"error_msg"`
+}
+
+type Req struct {
+	ProductId int
+	Source    string // 来源，安卓，苹果
+	AuthCode  string
+	FlashTime string // 抢购时间
+	Nance     string
+	// 1. 用户登录成功后，服务端设置两个cookie: userId和userAuth, md5(密钥+UserId)
+	// 2. 抢购的时候需要用这两个cookie进行校验
+	UserId       int
+	UserAuthSign string
+	AccessTime   time.Time // 访问时间
+	ClientIp     string
+	ClientRef    string // 用户从哪个页面进行的访问
+}
 
 type FlashSellConf struct {
 	redisConf         RedisConf
@@ -32,6 +54,7 @@ type FlashSellConf struct {
 	UserIDBlackMap    map[int]bool
 	redisBlackPool    *redis.Pool
 	redisPool         *redis.Pool
+	ReqChan           chan *Req
 }
 
 type ETCDProductInfo struct {
@@ -380,7 +403,6 @@ func initRedisBlack() (err error) {
 		lastUpDateTime := time.Now()
 		for {
 			conn = pool.Get()
-			defer conn.Close()
 			reply, err := conn.Do("BLPOP", "ip_blacklist", time.Second)
 			ip, err := redis.String(reply, err)
 			ipBlackList = append(ipBlackList, ip)
@@ -397,6 +419,7 @@ func initRedisBlack() (err error) {
 				}
 				logs.Info("从redis同步IP黑名单到全局map: %v", ipBlackList)
 			}
+			conn.Close()
 		}
 	}(pool)
 	GFlashSellConf.redisPool = pool
@@ -459,6 +482,7 @@ func loadConfig() (err error) {
 		UserAccessLimit:   userAccessLimit,
 		ReferWhitelist:    referWhiteList,
 		UserIpAccessLimit: userIPAccessLimit,
+		ReqChan:           make(chan *Req, 16), // todo 这个size可以配置化
 	}
 	logs.Info("配置信息: %+v", GFlashSellConf)
 	return nil
@@ -547,6 +571,72 @@ func watchETCDConf() error {
 	return nil
 }
 
+// 用Redis做队列
+func initRedisQueue() {
+	for i := 0; i < 16; i++ {
+		// 从请求通道获取请求并写入写redis消息
+		go func() {
+			for req := range GFlashSellConf.ReqChan {
+				conn := GFlashSellConf.redisPool.Get()
+				data, err := json.Marshal(&req)
+				if err != nil {
+					logs.Error("json序列化失败, req: %v, err: %v", req, err)
+					conn.Close()
+					continue
+				}
+				_, err = conn.Do("LPUSH", "flash_sell_queue", data)
+				if err != nil {
+					logs.Error("redis LPUSH命令失败, data: %v, err: %v", data, err)
+					conn.Close()
+					continue
+				}
+				conn.Close()
+			}
+		}()
+	}
+	for i := 0; i < 16; i++ {
+		// 从redis读取消息并做业务处理
+		go func() {
+			for {
+				conn := GFlashSellConf.redisPool.Get()
+				reply, err := redis.Values(conn.Do("BLPOP", "flash_sell_queue", 30*time.Second))
+				if err != nil {
+					if errors.Is(err, redis.ErrNil) {
+						// 空队列是正常情况
+						conn.Close()
+						time.Sleep(100 * time.Millisecond)
+						continue
+					}
+					logs.Error("Redis读取失败: %v", err)
+					conn.Close()
+					time.Sleep(time.Second)
+					continue
+				}
+				// 解析BRPOP返回结果 [key, value]
+				if len(reply) != 2 {
+					logs.Warn("无效的队列响应: %v", reply)
+					conn.Close()
+					continue
+				}
+				data, ok := reply[1].([]byte)
+				if !ok {
+					logs.Error("无效的队列数据类型: %T", reply[1])
+					conn.Close()
+					continue
+				}
+				var req Req
+				if err := json.Unmarshal(data, &req); err != nil {
+					logs.Error("JSON解析失败: %v", err)
+					conn.Close()
+					continue
+				}
+				conn.Close()
+				// todo 业务处理逻辑
+			}
+		}()
+	}
+
+}
 func InitConfig() (err error) {
 	// 1. 首先加载基本配置
 	if err := loadConfig(); err != nil {
@@ -590,6 +680,8 @@ func InitConfig() (err error) {
 
 	// 8. 启动ETCD配置监听
 	go watchETCDConf()
+
+	// 9. 启动goroutine往redis里面写数据
 
 	logs.Info("===== 所有组件初始化成功 =====")
 	logs.Info("全局配置信息: %v", GFlashSellConf)

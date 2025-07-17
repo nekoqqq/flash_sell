@@ -26,4 +26,5 @@ B站地址：https://www.bilibili.com/video/BV1et4y1i7LY?spm_id_from=333.788.vid
   - ID黑名单
   - 过载保护，降流限速
 - 业务层(Biz)
+  - 用Redis做队列，利用LPUSH和LPOP命令（非阻塞）
 - Web管理(Web)

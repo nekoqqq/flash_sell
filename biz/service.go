@@ -12,27 +12,6 @@ import (
 
 var gFreqControlMap = &FreqControlMap{userControl: make(map[int]*FreqLimit)}
 
-type Resp struct {
-	Data      map[string]interface{} `json:"data"`
-	ErrorCode int                    `json:"error_code"`
-	ErrorMsg  string                 `json:"error_msg"`
-}
-
-type Req struct {
-	ProductId int
-	Source    string // 来源，安卓，苹果
-	AuthCode  string
-	FlashTime string // 抢购时间
-	Nance     string
-	// 1. 用户登录成功后，服务端设置两个cookie: userId和userAuth, md5(密钥+UserId)
-	// 2. 抢购的时候需要用这两个cookie进行校验
-	UserId       int
-	UserAuthSign string
-	AccessTime   time.Time // 访问时间
-	ClientIp     string
-	ClientRef    string // 用户从哪个页面进行的访问
-}
-
 type FreqControlMap struct {
 	userControl map[int]*FreqLimit    // 每个用户当前时间的访问频次
 	IPControl   map[string]*FreqLimit // 每个IP当前的访问频次
@@ -62,7 +41,7 @@ func (fl *FreqLimit) GetCount(curTime time.Time) int {
 	return fl.count
 }
 
-func FlashSell(req *Req) (map[int]interface{}, int, error) {
+func FlashSell(req *conf.Req) (map[int]interface{}, int, error) {
 	data := map[int]interface{}{}
 	errCode := flash_sell.Succeed
 
@@ -136,6 +115,9 @@ func FlashSell(req *Req) (map[int]interface{}, int, error) {
 	if err != nil || errCode != flash_sell.Succeed {
 		logs.Warn("查询用户信息失败, userid: %v, errCode: %v, err: %v", req.UserId, errCode, err)
 	}
+
+	conf.GFlashSellConf.ReqChan <- req
+
 	return data, errCode, err
 }
 

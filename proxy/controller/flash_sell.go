@@ -3,6 +3,7 @@ package controller
 import (
 	"flash_sell"
 	"flash_sell/biz"
+	"flash_sell/conf"
 	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/logs"
 	"strconv"
@@ -14,7 +15,7 @@ type FlashSellController struct {
 }
 
 func (c *FlashSellController) FlashSell() {
-	resp := biz.Resp{
+	resp := conf.Resp{
 		Data:      make(map[string]interface{}),
 		ErrorCode: flash_sell.Succeed,
 	}
@@ -46,7 +47,7 @@ func (c *FlashSellController) FlashSell() {
 	//clientIP := strings.Split(c.Ctx.Request.RemoteAddr, ":")[0]
 	//clientRef := c.Ctx.Request.Referer()
 
-	req := &biz.Req{
+	req := &conf.Req{
 		ProductId:    productId,
 		Source:       source,
 		AuthCode:     autCode,
@@ -70,7 +71,7 @@ func (c *FlashSellController) FlashSell() {
 }
 
 func (c *FlashSellController) FlashSellInfo() {
-	resp := biz.Resp{
+	resp := conf.Resp{
 		Data:      make(map[string]interface{}),
 		ErrorCode: flash_sell.Succeed,
 	}
